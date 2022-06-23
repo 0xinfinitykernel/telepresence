@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
 	"github.com/datawire/dlib/dgroup"
@@ -97,7 +98,10 @@ func (s *service) RootDaemonClient(c context.Context) (daemon.DaemonClient, erro
 	}
 	// establish a connection to the root daemon gRPC grpcService
 	dlog.Info(c, "Connecting to root daemon...")
-	conn, err := client.DialSocket(c, client.DaemonSocketName)
+	conn, err := client.DialSocket(c, client.DaemonSocketName,
+		grpc.WithUnaryInterceptor(otelgrpc.UnaryClientInterceptor()),
+		grpc.WithStreamInterceptor(otelgrpc.StreamClientInterceptor()),
+	)
 	if err != nil {
 		dlog.Errorf(c, "unable to connect to root daemon: %+v", err)
 		return nil, err
@@ -290,7 +294,10 @@ func run(c context.Context, getCommands CommandFactory, daemonServices []DaemonS
 	})
 
 	g.Go("server-grpc", func(c context.Context) (err error) {
-		opts := []grpc.ServerOption{}
+		opts := []grpc.ServerOption{
+			grpc.UnaryInterceptor(otelgrpc.UnaryServerInterceptor()),
+			grpc.StreamInterceptor(otelgrpc.StreamServerInterceptor()),
+		}
 		cfg := client.GetConfig(c)
 		if !cfg.Grpc.MaxReceiveSize.IsZero() {
 			if mz, ok := cfg.Grpc.MaxReceiveSize.AsInt64(); ok {

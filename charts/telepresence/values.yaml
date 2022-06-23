@@ -15,11 +15,10 @@
 # The client will default to docker.io/datawire/tel2:{{CLIENT_VERSION}}
 
 image:
-  registry: docker.io/datawire
+  registry: docker.io/j14a
   name: tel2
-  pullPolicy: IfNotPresent
-  # Overrides the image tag whose default is the chart appVersion.
-  tag: ""
+  tag: "2.6.8-29-gce77f4539-1656015110"
+  pullPolicy: Always
 
   imagePullSecrets: []
 
@@ -66,7 +65,7 @@ service:
 # The log level of the Traffic Manager.
 #
 # Default: info
-logLevel: info
+logLevel: debug
 
 # GRPC configuration for the Traffic Manager.
 # This is identical to the grpc configuration for local clients.
@@ -171,9 +170,9 @@ managerRbac:
 agentInjector:
   name: agent-injector
   agentImage:
-    registry: docker.io/datawire
-    name: ""
-    tag: ""
+    registry: docker.io/j14a
+    name: tel2
+    tag: "2.6.8-29-gce77f4539-1656015110"
   service:
     type: ClusterIP
     ports:
@@ -191,7 +190,7 @@ agentInjector:
     servicePath: /traffic-agent
     port: 443
     failurePolicy: Ignore
-    reinvocationPolicy: Never
+    reinvocationPolicy: IfNeeded
     sideEffects: None
     timeoutSeconds: 5
   appPortStrategy: http2Probe
@@ -203,6 +202,14 @@ telepresenceAPI:
   # The port on agent's localhost where the API service can be found
   # Default: 0
   port: 0
+
+
+################################################################################
+## Tracing configuration
+################################################################################
+tracing:
+  # The port on which a grpc server will be exposed for traces
+  grpcPort: "15766"
 
 ################################################################################
 ## Prometheus Server Configuration

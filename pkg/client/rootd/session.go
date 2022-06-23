@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/blang/semver"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -32,6 +33,7 @@ import (
 	"github.com/telepresenceio/telepresence/v2/pkg/client/scout"
 	"github.com/telepresenceio/telepresence/v2/pkg/iputil"
 	"github.com/telepresenceio/telepresence/v2/pkg/subnet"
+	"github.com/telepresenceio/telepresence/v2/pkg/tracing"
 	"github.com/telepresenceio/telepresence/v2/pkg/tunnel"
 	"github.com/telepresenceio/telepresence/v2/pkg/vif"
 	"github.com/telepresenceio/telepresence/v2/pkg/vif/buffer"
@@ -141,7 +143,10 @@ func connectToManager(c context.Context) (*grpc.ClientConn, manager.ManagerClien
 	defer cancel()
 
 	var conn *grpc.ClientConn
-	conn, err := client.DialSocket(tc, client.ConnectorSocketName)
+	conn, err := client.DialSocket(tc, client.ConnectorSocketName,
+		grpc.WithUnaryInterceptor(otelgrpc.UnaryClientInterceptor()),
+		grpc.WithStreamInterceptor(otelgrpc.StreamClientInterceptor()),
+	)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			// The connector called us, and then it died which means we will die too. This is
@@ -467,6 +472,15 @@ func (s *session) checkConnectivity(ctx context.Context, info *manager.ClusterIn
 func (s *session) run(c context.Context) error {
 	defer dlog.Info(c, "-- Session ended")
 
+	tracer, err := tracing.NewTraceServer(c, tracing.DaemonPort, tracing.TraceConfig{
+		ProcessID:   4,
+		ProcessName: "root-daemon",
+	})
+
+	if err != nil {
+		return err
+	}
+
 	g := dgroup.NewGroup(c, dgroup.GroupConfig{})
 
 	cancelDNSLock := sync.Mutex{}
@@ -502,6 +516,7 @@ func (s *session) run(c context.Context) error {
 		return s.dnsServer.Worker(ctx, s.dev, s.configureDNS)
 	})
 	g.Go("router", s.routerWorker)
+	g.Go("tracer", tracer.Run)
 	return g.Wait()
 }
 

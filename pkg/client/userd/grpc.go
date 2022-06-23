@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc/codes"
 	grpcCodes "google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -81,6 +82,8 @@ func (s *service) withSession(c context.Context, callName string, f func(context
 		defer func() { err = callRecovery(c, recover(), err) }()
 		num := getReqNumber(c)
 		ctx := dgroup.WithGoroutineName(s.sessionContext, fmt.Sprintf("/%s-%d", callName, num))
+		ctx, span := otel.Tracer("userd-grpc").Start(ctx, callName)
+		defer span.End()
 		err = f(ctx, s.session)
 	})
 	return

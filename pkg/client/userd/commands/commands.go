@@ -14,7 +14,9 @@ const (
 
 // GetCommands will return all commands implemented by the connector daemon.
 func GetCommands() cliutil.CommandGroups {
-	return cliutil.CommandGroups{}
+	return cliutil.CommandGroups{
+		"Tracing": []*cobra.Command{TraceCommand(), PushTraces()},
+	}
 }
 
 // GetCommandsForLocal will return the same commands as GetCommands but in a non-runnable state that reports

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -303,7 +304,10 @@ func (d *service) serveGrpc(c context.Context, l net.Listener) error {
 		}
 	}()
 
-	var opts []grpc.ServerOption
+	opts := []grpc.ServerOption{
+		grpc.UnaryInterceptor(otelgrpc.UnaryServerInterceptor()),
+		grpc.StreamInterceptor(otelgrpc.StreamServerInterceptor()),
+	}
 	cfg := client.GetConfig(c)
 	if !cfg.Grpc.MaxReceiveSize.IsZero() {
 		if mz, ok := cfg.Grpc.MaxReceiveSize.AsInt64(); ok {

@@ -25,6 +25,7 @@ import (
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	typed "k8s.io/client-go/kubernetes/typed/core/v1"
 
 	"github.com/datawire/dlib/dcontext"
 	"github.com/datawire/dlib/dgroup"
@@ -47,6 +48,8 @@ import (
 	"github.com/telepresenceio/telepresence/v2/pkg/k8sapi"
 	"github.com/telepresenceio/telepresence/v2/pkg/matcher"
 	"github.com/telepresenceio/telepresence/v2/pkg/restapi"
+	"github.com/telepresenceio/telepresence/v2/pkg/tracing"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 )
 
 // A SessionService represents a service that should be started together with each daemon session.
@@ -63,6 +66,7 @@ type WatchWorkloadsStream interface {
 
 type Session interface {
 	restapi.AgentState
+	k8s.KubeConfig
 	AddIntercept(context.Context, *rpc.CreateInterceptRequest) (*rpc.InterceptResult, error)
 	CanIntercept(context.Context, *rpc.CreateInterceptRequest) (*serviceProps, *rpc.InterceptResult)
 	AddInterceptor(string, int) error
@@ -80,11 +84,13 @@ type Session interface {
 	WithK8sInterface(context.Context) context.Context
 	WorkloadInfoSnapshot(context.Context, []string, rpc.ListRequest_Filter, bool) (*rpc.WorkloadInfoSnapshot, error)
 	ManagerClient() manager.ManagerClient
+	ManagerConn() *grpc.ClientConn
 	GetCurrentNamespaces(forClientAccess bool) []string
 	ActualNamespace(string) string
 	RemainWithToken(context.Context) error
 	AddNamespaceListener(k8s.NamespaceListener)
 	GatherLogs(context.Context, *connector.LogsRequest) (*connector.LogsResponse, error)
+	ForeachAgentPod(ctx context.Context, fn func(context.Context, typed.PodInterface, *core.Pod), filter func(*core.Pod) bool) error
 }
 
 type Service interface {
@@ -303,6 +309,52 @@ func (tm *TrafficManager) ManagerClient() manager.ManagerClient {
 	return tm.managerClient
 }
 
+func (tm *TrafficManager) ManagerConn() *grpc.ClientConn {
+	return tm.managerConn
+}
+
+// const tracingEndpoint = "http://simplest-collector.ambassador:14268/api/traces"
+
+// func startTracer(ctx context.Context, cluster *k8s.Cluster) (func(context.Context), error) {
+// 	dialer, err := dnet.NewK8sPortForwardDialer(ctx, cluster.Config.RestConfig, k8sapi.GetK8sInterface(ctx), "svc")
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	client := &http.Client{
+// 		Transport: &http.Transport{
+// 			DialContext: func(ctx context.Context, _, address string) (net.Conn, error) {
+// 				return dialer(ctx, address)
+// 			},
+// 		},
+// 	}
+// 	exp, err := jaeger.New(jaeger.WithCollectorEndpoint(jaeger.WithEndpoint(tracingEndpoint), jaeger.WithHTTPClient(client)))
+
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	tp := trace.NewTracerProvider(
+// 		// Always be sure to batch in production.
+// 		trace.WithBatcher(exp),
+// 		trace.WithSampler(trace.AlwaysSample()),
+// 		// Record information about this application in a Resource.
+// 		trace.WithResource(resource.NewWithAttributes(
+// 			semconv.SchemaURL,
+// 			semconv.ServiceNameKey.String("user-daemon"),
+// 			attribute.Int64("ID", 2),
+// 		)),
+// 	)
+// 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
+// 	otel.SetTracerProvider(tp)
+// 	return func(ctx context.Context) {
+// 		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+// 		defer cancel()
+// 		if err := tp.Shutdown(ctx); err != nil {
+// 			dlog.Error(ctx, "error shutting down tracer: ", err)
+// 		}
+// 	}, nil
+
+// }
+
 // connectCluster returns a configured cluster instance
 func connectCluster(c context.Context, cr *rpc.ConnectRequest) (*k8s.Cluster, error) {
 	config, err := k8s.NewConfig(c, cr.KubeFlags)
@@ -375,7 +427,10 @@ func connectMgr(c context.Context, cluster *k8s.Cluster, installID string, svc S
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithNoProxy(),
 		grpc.WithBlock(),
-		grpc.WithReturnConnectionError()}
+		grpc.WithReturnConnectionError(),
+		grpc.WithUnaryInterceptor(otelgrpc.UnaryClientInterceptor()),
+		grpc.WithStreamInterceptor(otelgrpc.StreamClientInterceptor()),
+	}
 
 	var conn *grpc.ClientConn
 	if conn, err = grpc.DialContext(tc, grpcAddr, opts...); err != nil {
@@ -510,11 +565,22 @@ func (tm *TrafficManager) updateDaemonNamespaces(c context.Context) {
 func (tm *TrafficManager) Run(c context.Context) error {
 	defer dlog.Info(c, "-- Session ended")
 
+	tracer, err := tracing.NewTraceServer(c, tracing.UserdPort, tracing.TraceConfig{
+		ProcessID:   3,
+		ProcessName: "user-daemon",
+	})
+
+	if err != nil {
+		return err
+	}
+
 	g := dgroup.NewGroup(c, dgroup.GroupConfig{})
 	g.Go("remain", tm.remain)
 	g.Go("intercept-port-forward", tm.workerPortForwardIntercepts)
 	g.Go("agent-watcher", tm.agentInfoWatcher)
 	g.Go("dial-request-watcher", tm.dialRequestWatcher)
+	g.Go("tracer", tracer.Run)
+
 	for _, svc := range tm.sessionServices {
 		func(svc SessionService) {
 			dlog.Infof(c, "Starting additional session service %s", svc.Name())

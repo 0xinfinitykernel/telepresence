@@ -1,6 +1,7 @@
 package agentconfig
 
 import (
+	"os"
 	"strconv"
 	"strings"
 
@@ -36,6 +37,13 @@ func AgentContainer(
 		evs = append(evs, core.EnvVar{
 			Name:  EnvAPIPort,
 			Value: strconv.Itoa(int(config.APIPort)),
+		})
+	}
+	// TODO: Make this proper
+	if port, ok := os.LookupEnv("TELEPRESENCE_GRPC_TRACE_PORT"); ok {
+		evs = append(evs, core.EnvVar{
+			Name:  "TELEPRESENCE_GRPC_TRACE_PORT",
+			Value: port,
 		})
 	}
 	evs = append(evs,
